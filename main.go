@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -22,17 +23,27 @@ const (
 	BackupDirName        = "backups"
 )
 
+type PrinterMapping struct {
+	Name       string `json:"name"`
+	HWID       string `json:"hwid"`
+	Location   string `json:"location"`
+	PortName   string `json:"portName"`
+	PaperWidth string `json:"paperWidth"`
+}
+
 type Config struct {
-	CheckInterval             int      `json:"checkInterval"`
-	EnableUSBFix              bool     `json:"enableUSBFix"`
-	EnableSNMPFix             bool     `json:"enableSNMPFix"`
-	EnableBluetoothFix        bool     `json:"enableBluetoothFix"`
-	EnableNewPrinterDetection bool     `json:"enableNewPrinterDetection"`
-	EnableSelfMonitoring      bool     `json:"enableSelfMonitoring"`
-	EnableQZTrayWatch         bool     `json:"enableQZTrayWatch"`
-	Whitelist                 []string `json:"whitelist"`
-	Blacklist                 []string `json:"blacklist"`
-	MaintenanceMode           bool     `json:"maintenanceMode"`
+	CheckInterval             int              `json:"checkInterval"`
+	EnableUSBFix              bool             `json:"enableUSBFix"`
+	EnableSNMPFix             bool             `json:"enableSNMPFix"`
+	EnableBluetoothFix        bool             `json:"enableBluetoothFix"`
+	EnableNewPrinterDetection bool             `json:"enableNewPrinterDetection"`
+	EnableSelfMonitoring      bool             `json:"enableSelfMonitoring"`
+	EnableQZTrayWatch         bool             `json:"enableQZTrayWatch"`
+	AutoMapPrinters           bool             `json:"autoMapPrinters"`
+	Whitelist                 []string         `json:"whitelist"`
+	Blacklist                 []string         `json:"blacklist"`
+	PrinterMappings           []PrinterMapping `json:"printerMappings"`
+	MaintenanceMode           bool             `json:"maintenanceMode"`
 }
 
 type PrinterBackup struct {
@@ -47,9 +58,10 @@ var (
 	logFile        *os.File
 	backupDir      string
 	configPath     string
-	usbFixCooldown = map[string]time.Time{}
-	btFixCooldown  = map[string]time.Time{}
-	fixCooldownD   = 5 * time.Minute
+	usbFixCooldown  = map[string]time.Time{}
+	btFixCooldown   = map[string]time.Time{}
+	snmpFixCooldown = map[string]time.Time{}
+	fixCooldownD    = 5 * time.Minute
 )
 
 func main() {
@@ -122,8 +134,10 @@ func loadConfig() {
 		EnableNewPrinterDetection: true,
 		EnableSelfMonitoring:      true,
 		EnableQZTrayWatch:         true,
+		AutoMapPrinters:           false,
 		Whitelist:                 []string{},
 		Blacklist:                 []string{},
+		PrinterMappings:           []PrinterMapping{},
 		MaintenanceMode:           false,
 	}
 	exePath, err := os.Executable()
@@ -254,6 +268,283 @@ func shouldProcessPrinter(printerName string) bool {
 	return false
 }
 
+type usbPrinterPortInfo struct {
+	PortName   string
+	HWID       string
+	Location   string
+	DevicePath string
+}
+
+type usbPrinterInfo struct {
+	Name       string
+	PortName   string
+	DriverName string
+	Status     string
+}
+
+func scanUSBPrinterPorts() ([]usbPrinterPortInfo, error) {
+	psScript := `
+		$regPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Monitors\USB Monitor\Ports'
+		$ports = Get-ChildItem $regPath -ErrorAction SilentlyContinue
+		$results = @()
+		foreach ($port in $ports) {
+			$portName = $port.PSChildName
+			$devicePath = $null
+			try {
+				$devicePath = (Get-ItemProperty $port.PSPath -Name 'DevicePath' -ErrorAction Stop).DevicePath
+			} catch { continue }
+			$hwid = ''
+			$location = ''
+			$instanceId = ''
+			if ($devicePath -and ($devicePath -match '\\\\\?\\usb#vid_([0-9a-f]{4})&pid_([0-9a-f]{4})#(.+?)#{')) {
+				$vid = $matches[1].ToUpper()
+				$pid = $matches[2].ToUpper()
+				$tail = $matches[3]
+				$hwid = "USB\VID_$vid&PID_$pid"
+				$instanceId = "USB\VID_$vid&PID_$pid\" + ($tail -replace '#','\')
+				try {
+					$pnp = Get-PnpDevice -InstanceId $instanceId -ErrorAction Stop
+					$locProp = Get-PnpDeviceProperty -InstanceId $pnp.InstanceId -KeyName 'DEVPKEY_Device_LocationInfo' -ErrorAction SilentlyContinue
+					if ($locProp -and $locProp.Data) { $location = $locProp.Data }
+				} catch { }
+			}
+			$results += "USB_PORT|$portName|$hwid|$location|$devicePath"
+		}
+		if ($results.Count -eq 0) { Write-Output 'USB_PORT_NO_PORTS' }
+		foreach ($r in $results) { Write-Output $r }
+	`
+	out, err := runPowerShell(psScript)
+	if err != nil {
+		return nil, err
+	}
+	lines := parsePowerShellOutput(out)
+	var ports []usbPrinterPortInfo
+	for _, line := range lines {
+		if len(line) < 2 || line[0] != "USB_PORT" {
+			continue
+		}
+		info := usbPrinterPortInfo{PortName: line[1]}
+		if len(line) >= 3 {
+			info.HWID = line[2]
+		}
+		if len(line) >= 4 {
+			info.Location = line[3]
+		}
+		if len(line) >= 5 {
+			info.DevicePath = line[4]
+		}
+		ports = append(ports, info)
+	}
+	return ports, nil
+}
+
+func scanUSBPrinters() ([]usbPrinterInfo, error) {
+	psScript := `
+		$printers = Get-Printer | Where-Object { $_.PortName -like 'USB*' } | Select-Object Name, PortName, DriverName, PrinterStatus
+		foreach ($p in $printers) {
+			$status = if ($p.PrinterStatus) { $p.PrinterStatus } else { '0' }
+			Write-Output "PRINTER|$($p.Name)|$($p.PortName)|$($p.DriverName)|$status"
+		}
+		if ($printers.Count -eq 0) { Write-Output 'PRINTER_NO_PRINTERS' }
+	`
+	out, err := runPowerShell(psScript)
+	if err != nil {
+		return nil, err
+	}
+	lines := parsePowerShellOutput(out)
+	var printers []usbPrinterInfo
+	for _, line := range lines {
+		if len(line) < 2 || line[0] != "PRINTER" {
+			continue
+		}
+		p := usbPrinterInfo{Name: line[1]}
+		if len(line) >= 3 {
+			p.PortName = line[2]
+		}
+		if len(line) >= 4 {
+			p.DriverName = line[3]
+		}
+		if len(line) >= 5 {
+			p.Status = line[4]
+		}
+		printers = append(printers, p)
+	}
+	return printers, nil
+}
+
+func normalizeHWID(hwid string) string {
+	return strings.ToUpper(strings.TrimSpace(hwid))
+}
+
+func locationMatches(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+func findUSBPrinterPort(ports []usbPrinterPortInfo, mapping PrinterMapping) *usbPrinterPortInfo {
+	targetHWID := normalizeHWID(mapping.HWID)
+	targetLoc := strings.TrimSpace(mapping.Location)
+	for i := range ports {
+		if targetHWID != "" && normalizeHWID(ports[i].HWID) == targetHWID {
+			if targetLoc == "" || locationMatches(ports[i].Location, targetLoc) {
+				return &ports[i]
+			}
+		}
+	}
+	return nil
+}
+
+func isPrinterStatusOK(status string) bool {
+	okStatuses := []string{"Normal", "Idle", "ManualFeed", "IoActive", "Busy", "Printing", "Waiting", "Processing", "Initializing", "WarmingUp", "PowerSave"}
+	status = strings.TrimSpace(status)
+	if status == "" || status == "0" {
+		return true
+	}
+	for _, s := range okStatuses {
+		if strings.EqualFold(s, status) {
+			return true
+		}
+	}
+	return false
+}
+
+func setPrinterPort(printerName, portName string) error {
+	psScript := fmt.Sprintf(`Set-Printer -Name "%s" -PortName "%s"`, printerName, portName)
+	_, err := runPowerShell(psScript)
+	return err
+}
+
+func fixUSBPrinterMappings() error {
+	ports, err := scanUSBPrinterPorts()
+	if err != nil {
+		return fmt.Errorf("erro ao escanear portas USB: %w", err)
+	}
+	printers, err := scanUSBPrinters()
+	if err != nil {
+		return fmt.Errorf("erro ao escanear impressoras USB: %w", err)
+	}
+
+	if config.AutoMapPrinters {
+		autoDiscoverPrinterMappings(ports, printers)
+	}
+
+	if len(config.PrinterMappings) == 0 {
+		return nil
+	}
+
+	printerByName := make(map[string]usbPrinterInfo)
+	for _, p := range printers {
+		printerByName[p.Name] = p
+	}
+
+	usedPorts := make(map[string]string)
+	for _, mapping := range config.PrinterMappings {
+		current, ok := printerByName[mapping.Name]
+		if !ok {
+			logger.Printf("Mapeamento USB: impressora '%s' não encontrada", mapping.Name)
+			continue
+		}
+		if isPrinterStatusOK(current.Status) {
+			logger.Printf("Mapeamento USB: %s está OK na porta %s — ignorando", mapping.Name, current.PortName)
+			continue
+		}
+		port := findUSBPrinterPort(ports, mapping)
+		if port == nil {
+			logger.Printf("Mapeamento USB: dispositivo para '%s' não encontrado (hwid=%s location=%s)", mapping.Name, mapping.HWID, mapping.Location)
+			continue
+		}
+		if usedPorts[port.PortName] != "" && usedPorts[port.PortName] != mapping.Name {
+			logger.Printf("Mapeamento USB: porta %s já destinada a %s, ignorando %s", port.PortName, usedPorts[port.PortName], mapping.Name)
+			continue
+		}
+		usedPorts[port.PortName] = mapping.Name
+		if current.PortName == port.PortName {
+			logger.Printf("Mapeamento USB: %s já está na porta correta (%s)", mapping.Name, port.PortName)
+			continue
+		}
+		if err := setPrinterPort(mapping.Name, port.PortName); err != nil {
+			logger.Printf("Mapeamento USB: falha ao mover %s para %s: %v", mapping.Name, port.PortName, err)
+			continue
+		}
+		time.Sleep(2 * time.Second)
+		check, err := scanUSBPrinters()
+		if err != nil {
+			logger.Printf("Mapeamento USB: erro ao verificar %s após mover: %v", mapping.Name, err)
+			continue
+		}
+		var found usbPrinterInfo
+		for _, p := range check {
+			if p.Name == mapping.Name {
+				found = p
+				break
+			}
+		}
+		if isPrinterStatusOK(found.Status) {
+			logger.Printf("Mapeamento USB: %s movida de %s para %s (status OK)", mapping.Name, current.PortName, port.PortName)
+			if shouldProcessPrinter(mapping.Name) {
+				showNotification("Impressora Corrigida", fmt.Sprintf("%s mapeada para porta %s", mapping.Name, port.PortName))
+			}
+		} else {
+			logger.Printf("Mapeamento USB: %s não respondeu na porta %s, revertendo para %s", mapping.Name, port.PortName, current.PortName)
+			setPrinterPort(mapping.Name, current.PortName)
+		}
+	}
+	return nil
+}
+
+func autoDiscoverPrinterMappings(ports []usbPrinterPortInfo, printers []usbPrinterInfo) {
+	printerByName := make(map[string]usbPrinterInfo)
+	for _, p := range printers {
+		printerByName[p.Name] = p
+	}
+
+	var newMappings []PrinterMapping
+	existing := make(map[string]bool)
+	for _, m := range config.PrinterMappings {
+		existing[m.Name] = true
+	}
+
+	driverWidth := regexp.MustCompile(`(?i)(58|80)\s*mm`)
+	for _, port := range ports {
+		if port.HWID == "" {
+			continue
+		}
+		for _, printer := range printers {
+			if printer.PortName != port.PortName {
+				continue
+			}
+			if existing[printer.Name] {
+				continue
+			}
+			width := ""
+			if m := driverWidth.FindStringSubmatch(printer.DriverName); len(m) >= 2 {
+				width = m[1] + "mm"
+			}
+			mapping := PrinterMapping{
+				Name:       printer.Name,
+				HWID:       port.HWID,
+				Location:   port.Location,
+				PortName:   port.PortName,
+				PaperWidth: width,
+			}
+			newMappings = append(newMappings, mapping)
+			existing[printer.Name] = true
+		}
+	}
+
+	if len(newMappings) == 0 {
+		return
+	}
+
+	config.PrinterMappings = append(config.PrinterMappings, newMappings...)
+	saveConfig()
+	for _, m := range newMappings {
+		logger.Printf("Mapeamento auto-descoberto: %s -> %s (hwid=%s, width=%s)", m.Name, m.PortName, m.HWID, m.PaperWidth)
+	}
+	if len(newMappings) > 0 {
+		showNotification("Mapeamento de Impressoras", fmt.Sprintf("%d impressora(s) mapeada(s) automaticamente. Verifique config.json.", len(newMappings)))
+	}
+}
+
 func toPowerShellArray(items []string) string {
 	if len(items) == 0 {
 		return "@()"
@@ -283,6 +574,12 @@ func showNotification(title, message string) {
 }
 
 func fixAllOfflineUSBPrinters() {
+	if len(config.PrinterMappings) > 0 || config.AutoMapPrinters {
+		if err := fixUSBPrinterMappings(); err != nil {
+			logger.Printf("Erro ao corrigir mapeamento USB: %v", err)
+		}
+	}
+
 	psScript := fmt.Sprintf(`
 		$okStatuses = @('Normal', 'Idle', 'ManualFeed', 'IoActive', 'Busy', 'Printing', 'Waiting', 'Processing', 'Initializing', 'WarmingUp', 'PowerSave')
 		$whitelist = %s
@@ -419,9 +716,21 @@ func fixNetworkPrintersSNMP() {
 		if len(line) >= 2 && line[0] == "SNMP_FIXED" {
 			ports := line[1]
 			logger.Printf("SNMP desativado nas portas: %s", ports)
-			showNotification("SNMP Desativado", fmt.Sprintf("Portas corrigidas: %s", ports))
+			if shouldNotifySNMP(ports) {
+				showNotification("SNMP Desativado", fmt.Sprintf("Portas corrigidas: %s", ports))
+			}
 		}
 	}
+}
+
+func shouldNotifySNMP(ports string) bool {
+	key := strings.ReplaceAll(ports, ",", "_")
+	last, ok := snmpFixCooldown[key]
+	if ok && time.Since(last) < fixCooldownD {
+		return false
+	}
+	snmpFixCooldown[key] = time.Now()
+	return true
 }
 
 func fixBluetoothPrinters() {

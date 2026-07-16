@@ -112,8 +112,10 @@ O arquivo `config.json` deve ficar na mesma pasta do executável. Se não existi
   "enableNewPrinterDetection": true,
   "enableSelfMonitoring": true,
   "enableQZTrayWatch": true,
+  "autoMapPrinters": false,
   "whitelist": [],
   "blacklist": [],
+  "printerMappings": [],
   "maintenanceMode": false
 }
 ```
@@ -127,8 +129,10 @@ O arquivo `config.json` deve ficar na mesma pasta do executável. Se não existi
 | `enableNewPrinterDetection` | bool | Habilita detecção de impressoras recém-conectadas |
 | `enableSelfMonitoring` | bool | Habilita verificação de saúde do serviço |
 | `enableQZTrayWatch` | bool | Habilita monitoramento e reinício automático do QZ Tray |
+| `autoMapPrinters` | bool | Descobre e salva mapeamentos de HWID automaticamente na primeira execução |
 | `whitelist` | array | Lista de nomes de impressoras para processar (vazio = todas) |
 | `blacklist` | array | Lista de nomes de impressoras para ignorar |
+| `printerMappings` | array | Mapeamento fixo de impressora -> HWID/Location para correção automática |
 | `maintenanceMode` | bool | Pausa todas as correções quando `true` |
 
 #### Exemplos
@@ -150,6 +154,49 @@ O arquivo `config.json` deve ficar na mesma pasta do executável. Se não existi
   "blacklist": ["PDF Creator", "Microsoft Print to PDF"]
 }
 ```
+
+#### Mapeamento por HWID (58mm / 80mm)
+
+Se você possui duas ou mais impressoras USB (por exemplo, uma POS-58 e uma POS-80) e quer garantir que cada uma fique sempre na porta correta — mesmo se trocarem os cabos fisicamente — configure o `printerMappings`.
+
+Habilite a descoberta automática uma vez:
+
+```json
+{
+  "autoMapPrinters": true
+}
+```
+
+Na primeira execução, o Printer Guardian escaneia as impressoras conectadas, lê o **HWID** (VID/PID do dispositivo USB) e salva no `config.json`.
+
+Exemplo de configuração gerada:
+
+```json
+{
+  "printerMappings": [
+    {
+      "name": "POS-58",
+      "hwid": "USB\\VID_1234&PID_5678",
+      "location": "Port_#0006.Hub_#0004",
+      "portName": "USB006",
+      "paperWidth": "58mm"
+    },
+    {
+      "name": "POS-80",
+      "hwid": "USB\\VID_1234&PID_9ABC",
+      "location": "Port_#0007.Hub_#0004",
+      "portName": "USB007",
+      "paperWidth": "80mm"
+    }
+  ]
+}
+```
+
+Depois de salvo, o Guardian verifica a cada ciclo se a impressora do nome `name` está em estado problemático (Offline, Error, Unknown, Paused etc.) e se, nesse momento, a porta USB (`USB00X`) usada por ela não é a porta onde o HWID correspondente está conectado. Só nesse caso — por exemplo, após inverter os cabos — ele move a fila de impressão automaticamente. Se a impressora já estiver OK, a porta não é alterada.
+
+**Como funciona a inversão de portas:** se a POS-58 for fisicamente conectada onde a POS-80 estava, o Windows vai reconhecer o mesmo HWID da POS-58 na nova localização. O Guardian detecta que a POS-58 agora está em outra `USB00X` e move a fila "POS-58" para essa nova porta. O mesmo acontece para a POS-80. Desde que os modelos tenham HWIDs diferentes, a troca física é resolvida automaticamente.
+
+Para modelos idênticos (mesmo VID/PID), use o campo `location` com o valor mostrado em *Propriedades de hardware* (ex: `Port_#0006.Hub_#0004`) para desambiguar. Se o campo `location` estiver vazio, o HWID é usado sozinho.
 
 ### Arquivos Gerados em Tempo de Execução
 
