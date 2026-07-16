@@ -1,0 +1,12 @@
+{
+  "checkInterval": 15,
+  "enableUSBFix": true,
+  "enableSNMPFix": true,
+  "enableBluetoothFix": true,
+  "enableNewPrinterDetection": true,
+  "enableSelfMonitoring": true,
+  "enableQZTrayWatch": true,
+  "whitelist": [],
+  "blacklist": [],
+  "maintenanceMode": false
+}
