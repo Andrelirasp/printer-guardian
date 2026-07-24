@@ -15,7 +15,7 @@
         },
         "description": "Printer Guardian Service",
         "minimum-os": "win7",
-        "execution-level": "requireAdministrator",
+        "execution-level": "asInvoker",
         "ui-access": false,
         "auto-elevate": false,
         "dpi-awareness": "system"
