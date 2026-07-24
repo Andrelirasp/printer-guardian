@@ -14,6 +14,9 @@ const rules = [
 ];
 
 function classify(message) {
+  if (/configura(ç|c)ão.*(não encontrado|nao encontrado|usando padrões|usando padroes|criando)/i.test(message)) {
+    return 'warning';
+  }
   const rule = rules.find(({ match }) => match.test(message));
   return rule ? rule.type : 'info';
 }

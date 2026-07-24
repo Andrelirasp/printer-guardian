@@ -198,7 +198,7 @@ func loadConfig() {
 	configPath = filepath.Join(exeDir, ConfigFileName)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		logger.Println("Arquivo de configuração não encontrado, usando padrões")
+		logger.Println("AVISO: Arquivo de configuração não encontrado, criando novo arquivo com padrões...")
 		saveConfig()
 		return
 	}
