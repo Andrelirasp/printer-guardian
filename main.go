@@ -946,7 +946,7 @@ func watchQZTray() {
 			)
 			foreach ($path in $paths) {
 				if (Test-Path $path) {
-					Start-Process -FilePath $path -WindowStyle Hidden
+					Start-Process -FilePath $path
 					Write-Output "QZ_STARTED|$path"
 					return
 				}

@@ -7,7 +7,13 @@ set -e
 
 echo "Compilando Printer Guardian para Windows..."
 
-# Compilação cruzada para Windows com flag windowsgui
+# Gera o arquivo de recursos Windows (.syso) contendo o ícone caso o rsrc esteja disponível
+if command -v rsrc &> /dev/null && [ -f "icon.ico" ]; then
+    echo "Gerando recursos do executável com ícone (main.syso)..."
+    rsrc -ico icon.ico -o main.syso
+fi
+
+# Compilação para Windows com flag windowsgui (sem janela de terminal)
 GOOS=windows GOARCH=amd64 go build -ldflags="-H windowsgui" -o PrinterGuardian.exe main.go
 
 if [ $? -eq 0 ]; then

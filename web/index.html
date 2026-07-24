@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Printer Guardian | Analisador de Logs</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">PRINTER GUARDIAN</p>
+        <h1>Analisador de logs</h1>
+        <p class="subtitle">Cole um log ou envie um arquivo para identificar falhas, correções e o estado do QZ Tray.</p>
+      </div>
+      <button id="clear" class="button secondary" type="button">Limpar análise</button>
+    </header>
+
+    <section id="drop-zone" class="input-card" aria-label="Entrada do log">
+      <div class="input-heading">
+        <div>
+          <h2>Log do cliente</h2>
+          <p>Arraste um arquivo <code>.log</code> ou cole o conteúdo abaixo.</p>
+        </div>
+        <label class="button" for="file-input">Selecionar arquivo</label>
+        <input id="file-input" type="file" accept=".log,.txt,text/plain" hidden>
+      </div>
+      <textarea id="log-input" spellcheck="false" placeholder="2026/07/16 19:57:18 QZ Tray já está rodando: javaw (...) "></textarea>
+      <div class="input-actions">
+        <p id="file-name" class="file-name">Nenhum arquivo selecionado</p>
+        <button id="analyze" class="button primary" type="button">Analisar log</button>
+      </div>
+    </section>
+
+    <section id="empty-state" class="empty-state">
+      <strong>Aguardando um log</strong>
+      <span>O conteúdo é analisado somente no seu navegador e não é enviado para nenhum servidor.</span>
+    </section>
+
+    <section id="results" hidden>
+      <div id="verdict" class="verdict"></div>
+      <div class="summary-grid">
+        <article class="metric"><span>Linhas analisadas</span><strong id="total-lines">0</strong></article>
+        <article class="metric error"><span>Erros</span><strong id="error-count">0</strong></article>
+        <article class="metric warning"><span>Alertas</span><strong id="warning-count">0</strong></article>
+        <article class="metric success"><span>Correções</span><strong id="fix-count">0</strong></article>
+      </div>
+
+      <div class="result-grid">
+        <section class="panel findings-panel">
+          <div class="panel-title"><h2>Diagnóstico</h2><span id="range" class="muted"></span></div>
+          <div id="findings" class="findings"></div>
+        </section>
+        <section class="panel qz-panel">
+          <div class="panel-title"><h2>QZ Tray</h2><span id="qz-badge" class="badge neutral">Sem dados</span></div>
+          <p id="qz-summary" class="qz-summary"></p>
+          <div id="qz-events" class="event-list compact"></div>
+        </section>
+      </div>
+
+      <section class="panel timeline-panel">
+        <div class="panel-title">
+          <h2>Eventos relevantes</h2>
+          <div class="filters" role="group" aria-label="Filtrar eventos">
+            <button class="filter active" data-filter="all" type="button">Todos</button>
+            <button class="filter" data-filter="error" type="button">Erros</button>
+            <button class="filter" data-filter="warning" type="button">Alertas</button>
+            <button class="filter" data-filter="success" type="button">Correções</button>
+          </div>
+        </div>
+        <div id="events" class="event-list"></div>
+      </section>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
