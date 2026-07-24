@@ -10,27 +10,19 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
     Exit 1
 }
 
-Write-Host "[1/3] Verificando ferramentas de recurso (rsrc)..." -ForegroundColor Yellow
-$rsrcPath = "$env:USERPROFILE\go\bin\rsrc.exe"
-if (-not (Get-Command rsrc -ErrorAction SilentlyContinue) -and -not (Test-Path $rsrcPath)) {
-    Write-Host "Instalando rsrc automaticamente via 'go install'..." -ForegroundColor Yellow
-    go install github.com/akavel/rsrc@latest
+Write-Host "[1/3] Verificando ferramentas de recurso (go-winres)..." -ForegroundColor Yellow
+$winresPath = "$env:USERPROFILE\go\bin\go-winres.exe"
+if (-not (Get-Command go-winres -ErrorAction SilentlyContinue) -and -not (Test-Path $winresPath)) {
+    Write-Host "Instalando go-winres automaticamente via 'go install'..." -ForegroundColor Yellow
+    go install github.com/tc-hib/go-winres@latest
 }
 
-Write-Host "[2/3] Gerando arquivo de recursos com ícone e manifesto UAC (main.syso)..." -ForegroundColor Yellow
-if (Test-Path "icon.ico") {
-    if (Test-Path $rsrcPath) {
-        if (Test-Path "manifest.xml") {
-            & $rsrcPath -ico icon.ico -manifest manifest.xml -o main.syso
-        } else {
-            & $rsrcPath -ico icon.ico -o main.syso
-        }
-    } elseif (Get-Command rsrc -ErrorAction SilentlyContinue) {
-        if (Test-Path "manifest.xml") {
-            rsrc -ico icon.ico -manifest manifest.xml -o main.syso
-        } else {
-            rsrc -ico icon.ico -o main.syso
-        }
+Write-Host "[2/3] Gerando arquivo de recursos com ícone 3D e UAC (rsrc_windows_amd64.syso)..." -ForegroundColor Yellow
+if (Test-Path "winres\winres.json") {
+    if (Test-Path $winresPath) {
+        & $winresPath make
+    } elseif (Get-Command go-winres -ErrorAction SilentlyContinue) {
+        go-winres make
     }
 }
 
