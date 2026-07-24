@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -18,6 +20,9 @@ import (
 	"syscall"
 	"time"
 )
+
+//go:embed web/*
+var embeddedWebFS embed.FS
 
 const (
 	DefaultCheckInterval = 15 * time.Second
@@ -995,17 +1000,22 @@ func fixPrintSpooler() {
 
 func startLocalWebServer() {
 	exePath, err := os.Executable()
-	if err != nil {
-		return
-	}
 	exeDir := filepath.Dir(exePath)
-	webDir := filepath.Join(exeDir, "web")
-	if _, err := os.Stat(webDir); os.IsNotExist(err) {
-		webDir = "web"
+	if err != nil {
+		exeDir = "."
+	}
+
+	subFS, err := fs.Sub(embeddedWebFS, "web")
+	var handler http.Handler
+	if err == nil {
+		handler = http.FileServer(http.FS(subFS))
+	} else {
+		webDir := filepath.Join(exeDir, "web")
+		handler = http.FileServer(http.Dir(webDir))
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.Dir(webDir)))
+	mux.Handle("/", handler)
 
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
