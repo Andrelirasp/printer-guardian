@@ -27,7 +27,7 @@ if (Test-Path "winres\winres.json") {
 }
 
 Write-Host "[3/3] Compilando PrinterGuardian.exe..." -ForegroundColor Yellow
-go build -ldflags="-H windowsgui" -o PrinterGuardian.exe main.go
+go build -ldflags="-H windowsgui" -o PrinterGuardian.exe .
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""

@@ -31,7 +31,7 @@ if exist winres\winres.json (
 )
 
 echo [3/3] Compilando PrinterGuardian.exe...
-go build -ldflags="-H windowsgui" -o PrinterGuardian.exe main.go
+go build -ldflags="-H windowsgui" -o PrinterGuardian.exe .
 
 if %errorlevel% equ 0 (
     echo.
