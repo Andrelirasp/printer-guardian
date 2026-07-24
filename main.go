@@ -93,16 +93,17 @@ func (w *rotatingLogWriter) rotate() {
 }
 
 var (
-	config              Config
-	logger              *log.Logger
-	globalLogWriter     *rotatingLogWriter
-	backupDir           string
-	configPath          string
-	usbFixCooldown       = map[string]time.Time{}
-	btFixCooldown        = map[string]time.Time{}
-	snmpFixCooldown      = map[string]time.Time{}
+	config               Config
+	logger               *log.Logger
+	globalLogWriter      *rotatingLogWriter
+	backupDir            string
+	configPath           string
+	usbFixCooldown        = map[string]time.Time{}
+	btFixCooldown         = map[string]time.Time{}
+	snmpFixCooldown       = map[string]time.Time{}
 	fixCooldownD         = 5 * time.Minute
-	qzUnresponsiveCount int
+	qzUnresponsiveCount  int
+	lastQZNotFoundLogged time.Time
 )
 
 func main() {
@@ -1132,7 +1133,10 @@ func watchQZTray() {
 				logger.Printf("QZ Tray reiniciado: %s", path)
 				showNotification("QZ Tray Reiniciado", "O QZ Tray foi reaberto automaticamente")
 			case "QZ_NOT_FOUND":
-				logger.Println("ALERTA: QZ Tray não encontrado em nenhum caminho padrão")
+				if time.Since(lastQZNotFoundLogged) > 30*time.Minute {
+					lastQZNotFoundLogged = time.Now()
+					logger.Println("AVISO: QZ Tray não encontrado nos caminhos padrão (C:\\Program Files\\QZ Tray). Caso este cliente não utilize o QZ, você pode definir \"enableQZTrayWatch\": false no config.json.")
+				}
 			}
 		}
 	}
