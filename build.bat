@@ -1,13 +1,12 @@
 @echo off
-chcp 65001 > nul
 echo ====================================================
-echo   Printer Guardian v2.0 - Compilação Automática
+echo   Printer Guardian v2.0 - Compilacao Automatica
 echo ====================================================
 echo.
 
 where go >nul 2>nul
 if %errorlevel% neq 0 (
-    echo [ERRO] O Go não está instalado neste computador!
+    echo [ERRO] O Go nao esta instalado neste computador!
     echo Por favor, baixe e instale o Go em: https://go.dev/dl/
     pause
     exit /b 1
@@ -22,7 +21,7 @@ if %errorlevel% neq 0 (
     )
 )
 
-echo [2/3] Gerando arquivo de recursos com ícone e manifesto UAC (main.syso)...
+echo [2/3] Gerando arquivo de recursos (main.syso)...
 if exist icon.ico (
     if exist "%USERPROFILE%\go\bin\rsrc.exe" (
         if exist manifest.xml (
@@ -45,11 +44,11 @@ go build -ldflags="-H windowsgui" -o PrinterGuardian.exe main.go
 if %errorlevel% equ 0 (
     echo.
     echo ====================================================
-    echo   SUCESSO! Executável gerado: PrinterGuardian.exe
+    echo   SUCESSO! Executavel gerado: PrinterGuardian.exe
     echo ====================================================
     echo.
 ) else (
     echo.
-    echo [ERRO] Falha ao compilar o executável.
+    echo [ERRO] Falha ao compilar o executavel.
 )
 pause
