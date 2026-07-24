@@ -163,3 +163,46 @@ document.querySelectorAll('.filter').forEach((button) => button.addEventListener
   document.querySelectorAll('.filter').forEach((item) => item.classList.toggle('active', item === button));
   if (analysis) renderEvents();
 }));
+
+const btnLiveLog = document.querySelector('#btn-live-log');
+const btnRestartQZ = document.querySelector('#btn-restart-qz');
+const btnFixSpooler = document.querySelector('#btn-fix-spooler');
+
+if (btnLiveLog) {
+  btnLiveLog.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/logs');
+      if (!res.ok) throw new Error('Não foi possível conectar ao agente local');
+      const text = await res.text();
+      input.value = text;
+      document.querySelector('#file-name').textContent = 'Log do Agente Local (Ao Vivo)';
+      runAnalysis();
+    } catch (err) {
+      alert('Erro ao carregar log ao vivo: ' + err.message);
+    }
+  });
+}
+
+if (btnRestartQZ) {
+  btnRestartQZ.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/restart-qz', { method: 'POST' });
+      const data = await res.json();
+      alert(data.message || 'Solicitação enviada!');
+    } catch (err) {
+      alert('Erro ao solicitar reinício do QZ Tray: ' + err.message);
+    }
+  });
+}
+
+if (btnFixSpooler) {
+  btnFixSpooler.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/fix-spooler', { method: 'POST' });
+      const data = await res.json();
+      alert(data.message || 'Solicitação enviada!');
+    } catch (err) {
+      alert('Erro ao solicitar limpeza do Spooler: ' + err.message);
+    }
+  });
+}

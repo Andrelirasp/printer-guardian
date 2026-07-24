@@ -3,15 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -21,6 +24,7 @@ const (
 	ConfigFileName       = "config.json"
 	LogFileName          = "printer-guardian.log"
 	BackupDirName        = "backups"
+	MaxLogSizeBytes      = 5 * 1024 * 1024 // 5MB
 )
 
 type PrinterMapping struct {
@@ -52,22 +56,58 @@ type PrinterBackup struct {
 	Timestamp   time.Time
 }
 
+type rotatingLogWriter struct {
+	mu      sync.Mutex
+	logPath string
+	file    *os.File
+}
+
+func (w *rotatingLogWriter) Write(p []byte) (n int, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.file != nil {
+		info, err := w.file.Stat()
+		if err == nil && info.Size() > MaxLogSizeBytes {
+			w.file.Close()
+			w.rotate()
+			f, err := os.OpenFile(w.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err == nil {
+				w.file = f
+			}
+		}
+	}
+	if w.file != nil {
+		return w.file.Write(p)
+	}
+	return os.Stderr.Write(p)
+}
+
+func (w *rotatingLogWriter) rotate() {
+	for i := 2; i >= 1; i-- {
+		oldFile := fmt.Sprintf("%s.%d", w.logPath, i)
+		newFile := fmt.Sprintf("%s.%d", w.logPath, i+1)
+		_ = os.Rename(oldFile, newFile)
+	}
+	_ = os.Rename(w.logPath, w.logPath+".1")
+}
+
 var (
-	config         Config
-	logger         *log.Logger
-	logFile        *os.File
-	backupDir      string
-	configPath     string
-	usbFixCooldown  = map[string]time.Time{}
-	btFixCooldown   = map[string]time.Time{}
-	snmpFixCooldown = map[string]time.Time{}
-	fixCooldownD    = 5 * time.Minute
+	config              Config
+	logger              *log.Logger
+	globalLogWriter     *rotatingLogWriter
+	backupDir           string
+	configPath          string
+	usbFixCooldown       = map[string]time.Time{}
+	btFixCooldown        = map[string]time.Time{}
+	snmpFixCooldown      = map[string]time.Time{}
+	fixCooldownD         = 5 * time.Minute
+	qzUnresponsiveCount int
 )
 
 func main() {
 	initLogger()
-	defer logFile.Close()
-	logger.Println("=== Printer Guardian Iniciado ===")
+	logger.Println("=== Printer Guardian v2.0 Iniciado ===")
 	loadConfig()
 	initBackupDir()
 
@@ -76,11 +116,11 @@ func main() {
 	go func() {
 		<-sig
 		logger.Println("Printer Guardian encerrando...")
-		logFile.Close()
 		os.Exit(0)
 	}()
 
 	go initTrayIcon()
+	go startLocalWebServer()
 
 	for {
 		loadConfig()
@@ -118,11 +158,14 @@ func initLogger() {
 	}
 	exeDir := filepath.Dir(exePath)
 	logPath := filepath.Join(exeDir, LogFileName)
-	logFile, err = os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+
+	globalLogWriter = &rotatingLogWriter{logPath: logPath}
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Fatal("Erro ao abrir arquivo de log:", err)
 	}
-	logger = log.New(logFile, "", log.LstdFlags)
+	globalLogWriter.file = f
+	logger = log.New(globalLogWriter, "", log.LstdFlags)
 }
 
 func loadConfig() {
@@ -888,7 +931,7 @@ func applyDefaultSettings(printerName string) {
 }
 
 func selfHealthCheck() {
-	if logFile == nil {
+	if globalLogWriter == nil || globalLogWriter.file == nil {
 		logger.Println("ALERTA: Arquivo de log não está aberto")
 		return
 	}
@@ -901,6 +944,114 @@ func selfHealthCheck() {
 
 func initTrayIcon() {
 	logger.Println("Tray icon inicializado (implementação básica)")
+}
+
+func checkQZTrayHTTPHealth() bool {
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: tr,
+	}
+	endpoints := []string{"http://127.0.0.1:8182", "https://127.0.0.1:8181"}
+	for _, ep := range endpoints {
+		resp, err := client.Get(ep)
+		if err == nil {
+			resp.Body.Close()
+			return true
+		}
+	}
+	return false
+}
+
+func fixPrintSpooler() {
+	logger.Println("Iniciando rotina de recuperação e limpeza do Spooler de impressão do Windows...")
+	psScript := `
+		try {
+			Stop-Service -Name "Spooler" -Force -ErrorAction SilentlyContinue
+			Start-Sleep -Seconds 2
+			$spoolFiles = Join-Path $env:SystemRoot "System32\spool\PRINTERS\*"
+			Remove-Item -Path $spoolFiles -Force -ErrorAction SilentlyContinue
+			Start-Service -Name "Spooler" -ErrorAction Stop
+			Write-Output "SPOOLER_FIXED"
+		} catch {
+			Write-Output "SPOOLER_ERROR|$($_.Exception.Message)"
+		}
+	`
+	out, err := runPowerShell(psScript)
+	if err != nil {
+		logger.Println("Erro ao executar limpeza do Spooler:", err)
+		return
+	}
+	if strings.Contains(out, "SPOOLER_FIXED") {
+		logger.Println("Serviço Spooler do Windows limpo e reiniciado com sucesso!")
+		showNotification("Spooler Corrigido", "O serviço de impressão do Windows foi reiniciado")
+	} else {
+		logger.Printf("Resultado da limpeza do Spooler: %s", out)
+	}
+}
+
+func startLocalWebServer() {
+	exePath, err := os.Executable()
+	if err != nil {
+		return
+	}
+	exeDir := filepath.Dir(exePath)
+	webDir := filepath.Join(exeDir, "web")
+	if _, err := os.Stat(webDir); os.IsNotExist(err) {
+		webDir = "web"
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/", http.FileServer(http.Dir(webDir)))
+
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		statusData := map[string]interface{}{
+			"status":          "running",
+			"maintenanceMode": config.MaintenanceMode,
+			"checkInterval":   config.CheckInterval,
+			"timestamp":       time.Now().Format(time.RFC3339),
+			"version":         "2.0.0",
+		}
+		json.NewEncoder(w).Encode(statusData)
+	})
+
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		logPath := filepath.Join(exeDir, LogFileName)
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			http.Error(w, "Erro ao ler log", 500)
+			return
+		}
+		if len(data) > 100000 {
+			data = data[len(data)-100000:]
+		}
+		w.Write(data)
+	})
+
+	mux.HandleFunc("/api/restart-qz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		go watchQZTray()
+		json.NewEncoder(w).Encode(map[string]string{"message": "Reabertura do QZ Tray solicitada com sucesso"})
+	})
+
+	mux.HandleFunc("/api/fix-spooler", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		go fixPrintSpooler()
+		json.NewEncoder(w).Encode(map[string]string{"message": "Limpeza do Spooler solicitada com sucesso"})
+	})
+
+	logger.Println("Servidor Web Local de Diagnóstico rodando em http://localhost:9123")
+	if err := http.ListenAndServe("127.0.0.1:9123", mux); err != nil {
+		logger.Println("Aviso: Não foi possível iniciar o servidor web local na porta 9123:", err)
+	}
 }
 
 func watchQZTray() {
@@ -972,7 +1123,19 @@ func watchQZTray() {
 				if len(line) >= 3 {
 					path = line[2]
 				}
-				logger.Printf("QZ Tray já está rodando: %s (%s)", name, path)
+				if checkQZTrayHTTPHealth() {
+					qzUnresponsiveCount = 0
+					logger.Printf("QZ Tray em execução e saudável: %s (%s)", name, path)
+				} else {
+					qzUnresponsiveCount++
+					logger.Printf("ATENÇÃO: QZ Tray (%s) em execução, mas não respondeu na porta HTTP 8182/8181 (falha %d/3)", name, qzUnresponsiveCount)
+					if qzUnresponsiveCount >= 3 {
+						logger.Println("ALERTA: QZ Tray congelado/deadlock detectado. Encerrando processo travado...")
+						runPowerShell("Stop-Process -Name java, javaw, qz-tray -Force -ErrorAction SilentlyContinue")
+						qzUnresponsiveCount = 0
+						showNotification("QZ Tray Travado", "Detectado congelamento do QZ Tray — processo reiniciado automaticamente")
+					}
+				}
 			case "QZ_STARTED":
 				path := ""
 				if len(line) >= 2 {

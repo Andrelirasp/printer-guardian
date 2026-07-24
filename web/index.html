@@ -27,8 +27,11 @@
         <input id="file-input" type="file" accept=".log,.txt,text/plain" hidden>
       </div>
       <textarea id="log-input" spellcheck="false" placeholder="2026/07/16 19:57:18 QZ Tray já está rodando: javaw (...) "></textarea>
-      <div class="input-actions">
+      <div class="input-actions" style="flex-wrap: wrap; gap: 8px;">
         <p id="file-name" class="file-name">Nenhum arquivo selecionado</p>
+        <button id="btn-live-log" class="button secondary" type="button">Carregar Log Ao Vivo</button>
+        <button id="btn-restart-qz" class="button secondary" type="button">Reiniciar QZ Tray</button>
+        <button id="btn-fix-spooler" class="button secondary" type="button">Limpar Spooler</button>
         <button id="analyze" class="button primary" type="button">Analisar log</button>
       </div>
     </section>

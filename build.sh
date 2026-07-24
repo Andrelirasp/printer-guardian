@@ -7,10 +7,14 @@ set -e
 
 echo "Compilando Printer Guardian para Windows..."
 
-# Gera o arquivo de recursos Windows (.syso) contendo o ícone caso o rsrc esteja disponível
+# Gera o arquivo de recursos Windows (.syso) contendo ícone e manifesto UAC
 if command -v rsrc &> /dev/null && [ -f "icon.ico" ]; then
-    echo "Gerando recursos do executável com ícone (main.syso)..."
-    rsrc -ico icon.ico -o main.syso
+    echo "Gerando recursos do executável com ícone e manifesto UAC (main.syso)..."
+    if [ -f "manifest.xml" ]; then
+        rsrc -ico icon.ico -manifest manifest.xml -o main.syso
+    else
+        rsrc -ico icon.ico -o main.syso
+    fi
 fi
 
 # Compilação para Windows com flag windowsgui (sem janela de terminal)
