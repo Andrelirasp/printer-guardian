@@ -1065,10 +1065,16 @@ func watchQZTray() {
 			} | Select-Object -First 1
 		}
 		if (-not $proc) {
+			$excluded = @('powershell', 'pwsh', 'cmd', 'conhost', 'PrinterGuardian')
 			$proc = Get-CimInstance Win32_Process | Where-Object {
-				($_.ExecutablePath -and $_.ExecutablePath -like '*QZ Tray*') -or
-				($_.CommandLine -like '*qz-tray.jar*') -or
-				($_.CommandLine -like '*qz-tray.exe*')
+				$baseName = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
+				($excluded -notcontains $baseName) -and
+				($baseName -eq 'qz-tray' -or $baseName -like 'java*') -and
+				(
+					($_.ExecutablePath -and $_.ExecutablePath -like '*QZ Tray*') -or
+					($_.CommandLine -like '*qz-tray.jar*') -or
+					($_.CommandLine -like '*qz-tray.exe*')
+				)
 			} | Select-Object -First 1
 		}
 		if ($proc) {
