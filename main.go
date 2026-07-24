@@ -1056,44 +1056,32 @@ func startLocalWebServer() {
 
 func watchQZTray() {
 	psScript := `
-		$excluded = @('powershell', 'pwsh', 'cmd', 'conhost')
-		$proc = Get-Process | Where-Object {
-			($excluded -notcontains $_.ProcessName) -and
-			(
-				$_.ProcessName -like '*qz*' -or
-				($_.Path -and $_.Path -like '*QZ Tray*') -or
-				($_.MainWindowTitle -and $_.MainWindowTitle -like '*QZ Tray*')
-			)
-		}
+		$proc = Get-Process -Name "qz-tray" -ErrorAction SilentlyContinue | Select-Object -First 1
 		if (-not $proc) {
 			$proc = Get-Process | Where-Object {
-				($_.ProcessName -like 'java*' -or $_.ProcessName -like 'javaw*') -and
-				(
-					($_.Path -and $_.Path -like '*QZ Tray*') -or
-					($_.MainWindowTitle -and $_.MainWindowTitle -like '*QZ Tray*')
-				)
+				($_.ProcessName -eq 'qz-tray' -or $_.ProcessName -eq 'qz-tray.exe') -or
+				(($_.ProcessName -like 'java*' -or $_.ProcessName -like 'javaw*') -and ($_.Path -and $_.Path -like '*QZ Tray*'))
 			} | Select-Object -First 1
 		}
 		if (-not $proc) {
 			$proc = Get-CimInstance Win32_Process | Where-Object {
-				$baseName = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
-				($excluded -notcontains $baseName) -and
-				(
-					($_.ExecutablePath -and $_.ExecutablePath -like '*QZ Tray*') -or
-					($_.CommandLine -like '*qz-tray.jar*') -or
-					($_.CommandLine -like '*qz-tray.exe*')
-				)
+				($_.ExecutablePath -and $_.ExecutablePath -like '*QZ Tray*') -or
+				($_.CommandLine -like '*qz-tray.jar*') -or
+				($_.CommandLine -like '*qz-tray.exe*')
 			} | Select-Object -First 1
 		}
 		if ($proc) {
 			$found = $proc | Select-Object -First 1
-			Write-Output "QZ_RUNNING|$($found.ProcessName)|$($found.Path)"
+			$procPath = $found.Path
+			if (-not $procPath -and $found.ExecutablePath) { $procPath = $found.ExecutablePath }
+			Write-Output "QZ_RUNNING|$($found.ProcessName)|$procPath"
 		} else {
 			$paths = @(
 				"$env:ProgramFiles\QZ Tray\qz-tray.exe",
 				"${env:ProgramFiles(x86)}\QZ Tray\qz-tray.exe",
 				"$env:USERPROFILE\AppData\Local\Programs\QZ Tray\qz-tray.exe",
-				"$env:USERPROFILE\Desktop\QZ Tray\qz-tray.exe"
+				"$env:USERPROFILE\Desktop\QZ Tray\qz-tray.exe",
+				"C:\QZ Tray\qz-tray.exe"
 			)
 			foreach ($path in $paths) {
 				if (Test-Path $path) {
